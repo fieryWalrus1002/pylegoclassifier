@@ -147,9 +147,6 @@ class ImageSegmenter:
                   
 
 
-imseg = ImageSegmenter()
-
-nb = NaiveBayes()
-
-
-print(imseg.dummy_method("I'm a carrot!"))
+#imseg = ImageSegmenter()
+#nb = NaiveBayes()
+#print(imseg.dummy_method("I'm a carrot!"))
