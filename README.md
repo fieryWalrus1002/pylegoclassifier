@@ -38,3 +38,9 @@ imgseg = py.pylegoclassifier.ImageSegmenter()
 however_you_print_in_matlab(imgseg.dummy_method(img))
 
 4. you should get a string response with the type of the object. I'm aiming for the ndarray but its interesting to know what comes back.
+
+
+# stuff that python needs to have installed on the system in order to work:
+'c:\yourPythonDirectory\python.exe -m pip install numpy matplotlib opencv-contrib-python scipy skimage pandas sklearn'
+
+That command will install all of the modules currently needed to run this.
