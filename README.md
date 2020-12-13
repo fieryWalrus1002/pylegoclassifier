@@ -2,7 +2,9 @@
 python modules for machine vision matlab integration
 
 pylegoclassifier.py contains the following classes, each with their own methods. 
-1. ImageS
+* MatlabSurrogate, which is just my way of handling features I figure will be in the matlab code. 
+* ImageProcess, which does some background segmentation, extracts spectral information from an image and saves it to a pandas dataframe
+* NaiveBayes, an implementation of a naive bayes classifier 
 
 # accessing this module in matlab
 Reference: https://www.mathworks.com/help/matlab/matlab_external/create-object-from-python-class.html
@@ -38,12 +40,12 @@ img = py.numpy.array([2,3]) :
 
 2. instantiate the image segmentation class as an object in matlab
 ```
-imgseg = py.pylegoclassifier.ImageSegmenter()
+imgproc = py.pylegoclassifier.ImageProcess()
 ```
 
 3. call the dummy method, and give it 
 ```
-however_you_print_in_matlab(imgseg.dummy_method(img))
+however_you_print_in_matlab(imgproc.dummy_method(img))
 ```
 
 
