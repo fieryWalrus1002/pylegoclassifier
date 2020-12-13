@@ -12,6 +12,7 @@ from math import isnan
 import pandas as pd
 from sklearn.model_selection  import train_test_split
 from sklearn.metrics import confusion_matrix, precision_score, recall_score
+from skimage.filters import sobel
 
 # set random seed
 np.random.seed(26)
@@ -118,11 +119,11 @@ class NaiveBayes:
             
 # this exists only for my testing purposes
 class MatlabSurrogate():
-    __init__(self):
-        print("MatlabSurrogate has been created! I have nothing to do with Matlab, I'm just loading some images and then passing them to other things, like the code Eric is working on will do!")
+    def __init__(self):
         self.state_of_mind = "Badass."
         
-    def acquire_kinect_bgr(filename):
+        
+    def acquire_kinect_image(self, filename):
         # give this function a filename, and it will load that image with opencv
         # this will be a BGR format, because that is how opencv rolls
         kinect_image = cv.imread(filename)
@@ -131,22 +132,21 @@ class MatlabSurrogate():
     
     
     # function to display images resized, using opencv
-    def imshow(image):
-        w, h = int(image.shape[1]/2), int(image.shape[0]/2)
-        cv.namedWindow("output", w, h)
+    def imshow(self, image):
+        w, h = int(image.shape[1]/4), int(image.shape[0]/4)
+        cv.namedWindow("output", cv.WINDOW_NORMAL)
+        cv.resizeWindow("output", (w, h))
         cv.imshow("output", image)
-        cv2.imshow("test", image)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        cv.waitKey(0)
+        cv.destroyAllWindows()
     
     
 # I should probably have one image processing class that takes in a single image and then spits out a dataframe that could be used for prediction
 # replaces ImageSegmenter
 class ImageProcess():
-     def __init__(self):
-        pass
+    def __init__(self):
+        print("image processor activated! use 'process_image_to_df()' to get back a pandas df")
     
-        
     def dummy_method(self, a):
         if type(a) is np.ndarray:
             result = "object is a numpy.ndarray, this is perfect. Is the image RGB order or BGR?"
@@ -154,23 +154,311 @@ class ImageProcess():
         else:
             result = "object is a " + str(type(a)) + "and I'm gonna have a hard time with that"
             return result
+      
+    
+        
+    def bg_segmentation(self, image, mode="hsv"):
+        
+        if mode=="sobel":
+            from skimage.filters import sobel
+            
+            gray_image = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+            
+            # find the edges
+            elev_map = sobel(gray_image)
+            
+            # threshold it
+            foreground = np.zeros_like(image)
+            foreground[gray_image < 30] = 1
+            foreground[gray_image > 150] = 2
+          
+            #TODO add this
+        
+        else:
+            
+#             # gaussian blur
+#             blur_image = ndimage.gaussian_filter(image, sigma=4)
+            
+            
+            # create an hsv mask for red colors
+            color_mask = cv.inRange(cv.cvtColor(image, cv.COLOR_BGR2HSV), 
+                                 (0, 0, 100),
+                                 (180, 255, 255)).astype(np.uint8)
+            
+            black_mask = cv.inRange(cv.cvtColor(image, cv.COLOR_BGR2HSV), 
+                                 (0, 0, 0),
+                                 (179, 255, 30)).astype(np.uint8)
+            
+#             hsv_mask = black_mask + color_mask
+            hsv_mask = black_mask + color_mask
+            
+            hsv_mask = np.where(hsv_mask > 0, 1, 0).astype(np.uint8)
+
+            
+#             # erode the mask
+#             hsv_mask = morphology.erosion(hsv_mask, morphology.disk(5))
+            
+#             # gaussian blur
+            hsv_mask = ndimage.gaussian_filter(hsv_mask, sigma=1)
+
+            # erode the mask
+            hsv_mask = morphology.erosion(hsv_mask, morphology.disk(5))
+
+            # median filter to despeckle
+            hsv_mask = ndimage.median_filter(hsv_mask, size=(3, 3)).astype(np.uint8)
+
+            # binary dilation 
+            hsv_mask = morphology.binary_dilation(hsv_mask, np.ones((20, 20))).astype(np.uint8)
+
+            # fill the holes
+            hsv_mask = ndimage.binary_fill_holes(hsv_mask).astype(np.uint8)
+
+            # erode the mask
+            hsv_mask = morphology.erosion(hsv_mask, morphology.disk(5))
+            
+            # TODO: remove this it is for testing purposes to show the segmentation
+            m = MatlabSurrogate()
+            m.imshow(cv.bitwise_and(image, image, mask=hsv_mask).astype(np.uint8))
+            
+            # apply the mask and return the result        
+            return hsv_mask
+
+        
+    def bg_segmentation_eucdist(self, img_cube, roi_origin=(50, 50)):
+        
+        def euc_dist(roi_channels, sample_channels):
+            dist = [(roi_channels[i] - sample_channels[i])**2 for i in range(0, len(sample_channels))]
+            euc_dist = np.sqrt(np.sum(dist))
+            return euc_dist
+        
+        # variables
+        dist_th = 150
+
+        # define the roi using these values and use it to subset my_image and return the subset image
+        roi = np.array(img_cube[roi_origin[0]:roi_origin[0]+20, roi_origin[1]:roi_origin[1]+20,:])
+
+        ################################################################
+        # calculate the mean intensity value for the roi at each channel and store in a vector
+        roi_mean_vector = np.zeros(shape=(img_cube.shape[2], 1))
+
+        # iterate through all the channels
+        for channel in range(0, img_cube.shape[2]):
+            # channel of interest, reshaped to a vector
+            coi = img_cube[:,:,channel]
+            coi_vector = coi.reshape((img_cube.shape[0]* img_cube.shape[1]), 1)
+
+            # mean intensity for the channel added to intensity vector
+            roi_mean_vector[channel] = np.mean(coi_vector)
+        #################################################################
+        # knn
+        output_array = np.zeros(shape=(img_cube.shape[0], img_cube.shape[1]))
+
+        # time this process
+        import time
+        start_time = time.time()
+
+        for i in range(0, output_array.shape[0]):
+            for j in range(0, output_array.shape[1]):
+                # calculate the euc distance from the pixel[i,j] to roi_mean_vector
+                distance = euc_dist(roi_mean_vector, img_cube[i, j])
+                if distance < dist_th:
+                    output_array[i, j] = 1
+
+        print(time.time() - start_time)
+
+        # TODO: image enhancement on the output array to get rid of holes
+
+        # label the objects
+        labels, num_features = ndimage.measurements.label(output_array)
+
+        # retain only the object 1, the apple
+        mask = np.where(labels == 1, 1, 0).reshape(output_array.shape)
+
+        # median filter to denoise
+        mask = ndimage.median_filter(mask, size=(3, 3)).astype(np.int)
+
+        return mask
+
+
+
+
+
+        
+    
+    # this is the parent function of this class, it will call the other classes
+    def process_image_to_df(self, image, area_th):
+        # get a mask by background segmentation using hsv values
+        mask = self.bg_segmentation(image)
+        
+        # output image with drawn on contours
+        output_image = image.copy()
+        
+        # find the contours of the detected objects in the image
+        contours, hier = cv.findContours(mask, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+
+        # create the df that we'll return for this image
+        df = pd.DataFrame(columns=['y'])
+
+      
+        # blank canvas
+        cimg = np.zeros_like(image)
+
+        # reset the object num
+        object_num = 0
+
+        # draw all the contours on the image
+        for cnt in contours:
+
+            # blank canvas
+            cimg_subset = np.zeros_like(image)
+
+            # get the x, y, w, h of the bounding rect for the contour
+            x, y, w, h = cv.boundingRect(cnt)
+
+            # contour features
+            area = cv.contourArea(cnt)
+            rect_area = w * h
+            fullosity = area / rect_area
+
+            # get rid of tiny objects that are probably noise
+            if area > area_th and fullosity > .5:
+                aspect_ratio = float(w)/h
+                extent = float(area/ rect_area)
+                hull = cv.convexHull(cnt)
+                hull_area = cv.contourArea(hull)
+                solidity = float(area)/hull_area
+
+
+                eq_diameter = np.sqrt(4*area/np.pi)
+
+                M= cv.moments(cnt)
+                cx= int(M['m10']/M['m00'])
+                cy= int(M['m01']/M['m00'])
+                    
+                # draw the contour on the blank image as a filled white object
+                cv.drawContours(cimg, [cnt], 0, color=(255, 255, 255), thickness=-1)
+
+                # draw the bounding box on the cimg and output img as a green boundary
+                cv.rectangle(cimg, (x, y), (x+w, y+h), (0, 255,0), 2)
+                cv.rectangle(output_image, (x, y), (x+w, y+h), (0, 255,0), 2)
+
+                # take this rectangle as a subset of the image, and calculate things within it
+                # define the object subset of the image and mask
+                cimg_subset = cimg[y:y+h, x:x+w]
+                img_subset = image[y:y+h, x:x+w, :]
+
+                img_subset_hsv = cv.cvtColor(img_subset, cv.COLOR_BGR2HSV)
+
+                # create an hsv mask to remove the black background again
+                color_mask = cv.inRange(cv.cvtColor(img_subset, cv.COLOR_BGR2HSV), 
+                                     (0, 0, 100),
+                                     (180, 255, 255)).astype(np.uint8)
+
+                black_mask = cv.inRange(cv.cvtColor(img_subset, cv.COLOR_BGR2HSV), 
+                                     (0, 0, 0),
+                                     (90, 100, 10)).astype(np.uint8)
+
+                hsv_mask = black_mask + color_mask
+
+                # apply the mask
+                f = cv.bitwise_and(img_subset_hsv, img_subset_hsv, mask=hsv_mask).astype(np.uint8)
+
+                # calculate where the object is
+                pts = np.where(cimg_subset == 255)
+                hue = img_subset_hsv[pts[0], pts[1], 0]
+                sat = img_subset_hsv[pts[0], pts[1], 1]
+                val = img_subset_hsv[pts[0], pts[1], 2]
+                r = img_subset[pts[0], pts[1], 0]
+                g = img_subset[pts[0], pts[1], 1]
+                b = img_subset[pts[0], pts[1], 2]
+
+                # add the object labels to the cimg for identification
+                cv.putText(cimg, text= str(object_num), 
+                           org=(cx - 5,cy - 5), 
+                           fontFace= cv.FONT_HERSHEY_SIMPLEX,
+                           fontScale=3, 
+                           color=(255,0,255), 
+                           thickness=5, 
+                           lineType=cv.LINE_AA)
+                
+                # add the object labels to the cimg for identification
+                cv.putText(output_image, text= str(object_num), 
+                           org=(cx - 5,cy - 5), 
+                           fontFace= cv.FONT_HERSHEY_SIMPLEX,
+                           fontScale=3, 
+                           color=(255,255,255), 
+                           thickness=5, 
+                           lineType=cv.LINE_AA)
+                
+
+        #         print(r.mean(), g.mean(), b.mean(), gli.mean())
+                df = df.append({'color' : 0,
+                                'x': x,
+                                'y': y,
+                                'object_num': object_num,
+                                'r': r.mean(),
+                                'g': g.mean(),
+                                'b': b.mean(),
+                                'hue': hue.mean(),
+                                'sat': sat.mean(),
+                                'val': val.mean()
+                                 }, ignore_index=True)
+
+                # last thing we do on this loop is increment the object_num
+                object_num += 1
+    
+        # end result should be a pandas dataframe and the contour image with numbers
+        return df.sort_values(by='y', axis=0, ascending=True), output_image
+    
+    
+    def hsv_slide_tool(self, image):
+        
+        def empty(a):
+            pass
+        
+        h, w = int(image.shape[1]/4), int(image.shape[0]/4)
+        cv.namedWindow('masked_image', cv.WINDOW_NORMAL)
+        cv.resizeWindow('masked_image', 800, 600)
+        
+        cv.namedWindow("trackbars")
+        cv.resizeWindow("trackbars", 800, 300)
+        
+        cv.createTrackbar("hue_min", "trackbars", 0, 179, empty)
+        cv.createTrackbar('hue_max', 'trackbars', 179, 179, empty)
+        cv.createTrackbar('sat_min', 'trackbars', 0, 255, empty)
+        cv.createTrackbar('sat_max', 'trackbars', 255, 255, empty)
+        cv.createTrackbar('val_min', 'trackbars', 0, 255, empty)
+        cv.createTrackbar('val_max', 'trackbars', 255, 255, empty)
+
+        while True:
+            # get image
+            img_hsv = cv.cvtColor(image, cv.COLOR_BGR2HSV)
+            
+            # get trackbar positions
+            h_min = cv.getTrackbarPos("hue_min", "trackbars")
+            h_max = cv.getTrackbarPos('hue_max', 'trackbars')
+            s_min = cv.getTrackbarPos('sat_min', 'trackbars')
+            s_max = cv.getTrackbarPos('sat_max', 'trackbars')
+            v_min = cv.getTrackbarPos('val_min', 'trackbars')
+            v_max = cv.getTrackbarPos('val_max', 'trackbars')
+            
+            # create mask
+            lower_hsv = np.array([h_min, s_min, v_min])
+            higher_hsv = np.array([h_max, s_max, v_max])
+            mask = cv.inRange(img_hsv, lower_hsv, higher_hsv)
+            masked_image = cv.bitwise_and(img_hsv, img_hsv, mask=mask)
+            
+            
+            cv.imshow('masked_image', masked_image)
+            k = cv.waitKey(1000) & 0xFF # large wait time
+            if k == 113 or k == 27:
+                break
+        
+        cv.destroyAllWindows()
+            
         
         
-    def bg_segmentation(self, image):
-        # create an hsv mask for red colors
-        hsv_mask = cv.inRange(cv.cvtColor(image, cv.COLOR_BGR2HSV), 
-                             (0, 0, 100),
-                             (360, 255, 255)).astype(np.uint8)
-        hsv_mask = np.where(hsv_mask > 0, 1, 0).astype(np.uint8)
 
-        # median filter to despeckle
-        hsv_mask = ndimage.median_filter(hsv_mask, size=(3, 3)).astype(np.uint8)
-
-        # binary dilation 
-        hsv_mask = morphology.binary_dilation(hsv_mask, np.ones((6, 6))).astype(np.uint8)
-
-        # erode the mask
-        hsv_mask = morphology.erosion(hsv_mask, morphology.disk(5))
         
-        # apply the mask and return the result
-        return cv.bitwise_and(image, image, mask=hsv_mask).astype(np.uint8)
+        
+    
