@@ -1,3 +1,5 @@
+
+# import the needed packages
 import numpy as np
 from matplotlib import pyplot as plt
 import cv2 as cv
@@ -11,7 +13,10 @@ import pandas as pd
 from sklearn.model_selection  import train_test_split
 from sklearn.metrics import confusion_matrix, precision_score, recall_score
 
+# set random seed
+np.random.seed(26)
 
+# the NaiveBayes classifier I wrote for assignment 6 in BSYSE_530, modified a little for this purpose
 class NaiveBayes:
     # P(c|x) = P(x|c) * P(c) / P(x)
     # P(x|x) is the posterior probability
@@ -110,43 +115,62 @@ class NaiveBayes:
 # TODO: read these and see how it works        
 # https://www.mathworks.com/help/matlab/matlab_external/matlab-arrays-as-python-variables.html        
 # https://www.mathworks.com/help/matlab/matlab_external/passing-data-to-python.html        
-
-class ImageSegmenter:
-    def bg_segmentation(self, image):
+            
+# this exists only for my testing purposes
+class MatlabSurrogate():
+    __init__(self):
+        print("MatlabSurrogate has been created! I have nothing to do with Matlab, I'm just loading some images and then passing them to other things, like the code Eric is working on will do!")
+        self.state_of_mind = "Badass."
         
-        hsv_image = cv.cvtColor(image, cv.COLOR_BGR2HSV)
-
-        # create an hsv mask for red colors
-        hsv_mask = cv.inRange(hsv_image, 
-                             (0, 0, 100),
-                             (360, 255, 255)).astype(np.uint8)
-        hsv_mask = np.where(hsv_mask > 0, 1, 0).astype(np.uint8)
-
-        # median filter
-        hsv_mask = ndimage.median_filter(hsv_mask, size=(3, 3)).astype(np.uint8)
-
-        # binary dilation
-        hsv_mask = morphology.binary_dilation(hsv_mask, np.ones((6, 6))).astype(np.uint8)
-
-        # erode the mask
-        hsv_mask = morphology.erosion(hsv_mask, morphology.disk(5))
-
-        # apply the mask
-        image_2 = cv.bitwise_and(image, image, mask =hsv_mask).astype(np.uint8)
-
-        return image_2
+    def acquire_kinect_bgr(filename):
+        # give this function a filename, and it will load that image with opencv
+        # this will be a BGR format, because that is how opencv rolls
+        kinect_image = cv.imread(filename)
+        print(f"kinect has acquired the image with shape = {kinect_image.shape}")
+        return kinect_image
+    
+    
+    # function to display images resized, using opencv
+    def imshow(image):
+        w, h = int(image.shape[1]/2), int(image.shape[0]/2)
+        cv.namedWindow("output", w, h)
+        cv.imshow("output", image)
+        cv2.imshow("test", image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    
+    
+# I should probably have one image processing class that takes in a single image and then spits out a dataframe that could be used for prediction
+# replaces ImageSegmenter
+class ImageProcess():
+     def __init__(self):
+        pass
     
         
     def dummy_method(self, a):
         if type(a) is np.ndarray:
-            result = "object is a numpy.ndarray"
+            result = "object is a numpy.ndarray, this is perfect. Is the image RGB order or BGR?"
             return result
         else:
             result = "object is a " + str(type(a)) + "and I'm gonna have a hard time with that"
             return result
-                  
+        
+        
+    def bg_segmentation(self, image):
+        # create an hsv mask for red colors
+        hsv_mask = cv.inRange(cv.cvtColor(image, cv.COLOR_BGR2HSV), 
+                             (0, 0, 100),
+                             (360, 255, 255)).astype(np.uint8)
+        hsv_mask = np.where(hsv_mask > 0, 1, 0).astype(np.uint8)
 
+        # median filter to despeckle
+        hsv_mask = ndimage.median_filter(hsv_mask, size=(3, 3)).astype(np.uint8)
 
-#imseg = ImageSegmenter()
-#nb = NaiveBayes()
-#print(imseg.dummy_method("I'm a carrot!"))
+        # binary dilation 
+        hsv_mask = morphology.binary_dilation(hsv_mask, np.ones((6, 6))).astype(np.uint8)
+
+        # erode the mask
+        hsv_mask = morphology.erosion(hsv_mask, morphology.disk(5))
+        
+        # apply the mask and return the result
+        return cv.bitwise_and(image, image, mask=hsv_mask).astype(np.uint8)
