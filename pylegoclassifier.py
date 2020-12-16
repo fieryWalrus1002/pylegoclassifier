@@ -1,5 +1,7 @@
 
 # import the needed packages
+import time
+from random import randint, uniform
 import numpy as np
 from matplotlib import pyplot as plt
 import cv2 as cv
@@ -13,6 +15,7 @@ import pandas as pd
 from sklearn.model_selection  import train_test_split
 from sklearn.metrics import confusion_matrix, precision_score, recall_score
 from skimage.filters import sobel
+
 
 # set random seed
 np.random.seed(26)
@@ -146,6 +149,14 @@ class MatlabSurrogate():
 class ImageProcess():
     def __init__(self):
         print("image processor activated! use 'process_image_to_df()' to get back a pandas df")
+        self.black_lower = (0, 0, 0)
+        self.black_upper = (179, 255, 30)
+        self.hsv_lower = (0, 0, 100)
+        self.hsv_upper = (179, 255, 255)
+#         self.black_lower = (0, 0, 203)
+#         self.black_upper = (43, 255, 255)
+#         self.hsv_lower = (0, 0, 70)
+#         self.hsv_upper = (179, 34, 255)
     
     def dummy_method(self, a):
         if type(a) is np.ndarray:
@@ -181,19 +192,24 @@ class ImageProcess():
             
             
             # create an hsv mask for red colors
-            color_mask = cv.inRange(cv.cvtColor(image, cv.COLOR_BGR2HSV), 
-                                 (0, 0, 100),
-                                 (180, 255, 255)).astype(np.uint8)
+            hsv_mask = cv.inRange(cv.cvtColor(image, cv.COLOR_BGR2HSV), 
+                                 self.hsv_lower,
+                                 self.hsv_upper).astype(np.uint8)
             
             black_mask = cv.inRange(cv.cvtColor(image, cv.COLOR_BGR2HSV), 
-                                 (0, 0, 0),
-                                 (179, 255, 30)).astype(np.uint8)
+                                 self.black_lower,
+                                 self.black_upper).astype(np.uint8)
             
 #             hsv_mask = black_mask + color_mask
-            hsv_mask = black_mask + color_mask
             
-            hsv_mask = np.where(hsv_mask > 0, 1, 0).astype(np.uint8)
-
+#           hsv_mask = black_mask + hsv_mask
+            
+            
+            hsv_mask = np.where(hsv_mask > 1, 1, 0).astype(np.uint8)
+            
+            black_mask = np.where(black_mask > 1, 1, 0).astype(np.uint8)
+            print(np.amin(black_mask), np.amax(black_mask))
+            hsv_mask = black_mask + hsv_mask
             
 #             # erode the mask
 #             hsv_mask = morphology.erosion(hsv_mask, morphology.disk(5))
@@ -223,70 +239,9 @@ class ImageProcess():
             # apply the mask and return the result        
             return hsv_mask
 
-        
-    def bg_segmentation_eucdist(self, img_cube, roi_origin=(50, 50)):
-        
-        def euc_dist(roi_channels, sample_channels):
-            dist = [(roi_channels[i] - sample_channels[i])**2 for i in range(0, len(sample_channels))]
-            euc_dist = np.sqrt(np.sum(dist))
-            return euc_dist
-        
-        # variables
-        dist_th = 150
-
-        # define the roi using these values and use it to subset my_image and return the subset image
-        roi = np.array(img_cube[roi_origin[0]:roi_origin[0]+20, roi_origin[1]:roi_origin[1]+20,:])
-
-        ################################################################
-        # calculate the mean intensity value for the roi at each channel and store in a vector
-        roi_mean_vector = np.zeros(shape=(img_cube.shape[2], 1))
-
-        # iterate through all the channels
-        for channel in range(0, img_cube.shape[2]):
-            # channel of interest, reshaped to a vector
-            coi = img_cube[:,:,channel]
-            coi_vector = coi.reshape((img_cube.shape[0]* img_cube.shape[1]), 1)
-
-            # mean intensity for the channel added to intensity vector
-            roi_mean_vector[channel] = np.mean(coi_vector)
-        #################################################################
-        # knn
-        output_array = np.zeros(shape=(img_cube.shape[0], img_cube.shape[1]))
-
-        # time this process
-        import time
-        start_time = time.time()
-
-        for i in range(0, output_array.shape[0]):
-            for j in range(0, output_array.shape[1]):
-                # calculate the euc distance from the pixel[i,j] to roi_mean_vector
-                distance = euc_dist(roi_mean_vector, img_cube[i, j])
-                if distance < dist_th:
-                    output_array[i, j] = 1
-
-        print(time.time() - start_time)
-
-        # TODO: image enhancement on the output array to get rid of holes
-
-        # label the objects
-        labels, num_features = ndimage.measurements.label(output_array)
-
-        # retain only the object 1, the apple
-        mask = np.where(labels == 1, 1, 0).reshape(output_array.shape)
-
-        # median filter to denoise
-        mask = ndimage.median_filter(mask, size=(3, 3)).astype(np.int)
-
-        return mask
-
-
-
-
-
-        
-    
     # this is the parent function of this class, it will call the other classes
-    def process_image_to_df(self, image, area_th):
+    def process_image_to_df(self, image, area_th, export_img):
+        
         # get a mask by background segmentation using hsv values
         mask = self.bg_segmentation(image)
         
@@ -298,10 +253,12 @@ class ImageProcess():
 
         # create the df that we'll return for this image
         df = pd.DataFrame(columns=['y'])
+#         df = df_to_append
 
       
         # blank canvas
         cimg = np.zeros_like(image)
+        overlay_img = np.zeros_like(image)
 
         # reset the object num
         object_num = 0
@@ -336,32 +293,36 @@ class ImageProcess():
                 cy= int(M['m01']/M['m00'])
                     
                 # draw the contour on the blank image as a filled white object
-                cv.drawContours(cimg, [cnt], 0, color=(255, 255, 255), thickness=-1)
+#                 cv.drawContours(cimg, [cnt], 0, color=(255, 255, 255), thickness=-1)
 
                 # draw the bounding box on the cimg and output img as a green boundary
                 cv.rectangle(cimg, (x, y), (x+w, y+h), (0, 255,0), 2)
+                cv.rectangle(overlay_img, (x, y), (x+w, y+h), (0, 255,0), 2)
                 cv.rectangle(output_image, (x, y), (x+w, y+h), (0, 255,0), 2)
 
                 # take this rectangle as a subset of the image, and calculate things within it
                 # define the object subset of the image and mask
                 cimg_subset = cimg[y:y+h, x:x+w]
                 img_subset = image[y:y+h, x:x+w, :]
-
+#                 exp_img = img_subset.copy()
+                
+                
                 img_subset_hsv = cv.cvtColor(img_subset, cv.COLOR_BGR2HSV)
 
                 # create an hsv mask to remove the black background again
                 color_mask = cv.inRange(cv.cvtColor(img_subset, cv.COLOR_BGR2HSV), 
-                                     (0, 0, 100),
-                                     (180, 255, 255)).astype(np.uint8)
+                                     self.hsv_lower,
+                                     self.hsv_upper).astype(np.uint8)
 
                 black_mask = cv.inRange(cv.cvtColor(img_subset, cv.COLOR_BGR2HSV), 
-                                     (0, 0, 0),
-                                     (90, 100, 10)).astype(np.uint8)
+                                     self.black_lower,
+                                     self.black_upper).astype(np.uint8)
 
                 hsv_mask = black_mask + color_mask
 
-                # apply the mask
-                f = cv.bitwise_and(img_subset_hsv, img_subset_hsv, mask=hsv_mask).astype(np.uint8)
+                # apply the mask 
+                img_subset_hsv = cv.bitwise_and(img_subset_hsv, img_subset_hsv, mask=hsv_mask).astype(np.uint8)
+                img_subset = cv.bitwise_and(img_subset, img_subset, mask=hsv_mask).astype(np.uint8)
 
                 # calculate where the object is
                 pts = np.where(cimg_subset == 255)
@@ -371,7 +332,14 @@ class ImageProcess():
                 r = img_subset[pts[0], pts[1], 0]
                 g = img_subset[pts[0], pts[1], 1]
                 b = img_subset[pts[0], pts[1], 2]
+                
+                # and export the image for later analysis with something else like a neural network
+                if (export_img == True):
+                    cv.imwrite(f"images/train/XX_{object_num}_{randint(11,99)}.png", img_subset)
+                
 
+                
+                
                 # add the object labels to the cimg for identification
                 cv.putText(cimg, text= str(object_num), 
                            org=(cx - 5,cy - 5), 
@@ -380,6 +348,9 @@ class ImageProcess():
                            color=(255,0,255), 
                            thickness=5, 
                            lineType=cv.LINE_AA)
+                
+                
+                
                 
                 # add the object labels to the cimg for identification
                 cv.putText(output_image, text= str(object_num), 
@@ -390,7 +361,9 @@ class ImageProcess():
                            thickness=5, 
                            lineType=cv.LINE_AA)
                 
-
+                
+                
+                
         #         print(r.mean(), g.mean(), b.mean(), gli.mean())
                 df = df.append({'color' : 0,
                                 'x': x,
@@ -406,9 +379,11 @@ class ImageProcess():
 
                 # last thing we do on this loop is increment the object_num
                 object_num += 1
+        
+        #
     
         # end result should be a pandas dataframe and the contour image with numbers
-        return df.sort_values(by='y', axis=0, ascending=True), output_image
+        return df.sort_values(by='object_num', axis=0, ascending=True), output_image, cimg
     
     
     def hsv_slide_tool(self, image):
@@ -455,10 +430,25 @@ class ImageProcess():
                 break
         
         cv.destroyAllWindows()
-            
         
+    def label_dataframe(self, image_df, class_list):
+        for i, row in image_df.iterrows():
+            image_df.loc[i, 'color'] = class_list[i]
+        print(type(image_df))
+        return image_df
+    
+#     def fake_df(self, input_df, reps = 3):
+#         # creates a bunch of fake adjustments to the dataframe so my train set is bigger
+#         output_df = input_df.copy()
         
-
-        
+#         for rep in range(0, reps):
+#             fake_df = input_df.copy()
+#             for i, row in fake_df.iterrows():
+#                 fake_df.loc[i, 'r'] = fake_df.loc[i, 'r'] + uniform(-.1, .1)
+#                 fake_df.loc[i, 'g'] = fake_df.loc[i, 'g'] + uniform(-.1, .1)
+#                 fake_df.loc[i, 'b'] = fake_df.loc[i, 'b'] + uniform(-.1, .1)
+#             output_df = pd.concat(output_df, fake_df)
+                
+#         return output_df
         
     
